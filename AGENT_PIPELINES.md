@@ -767,3 +767,490 @@ Used for categorizing and processing code review comments.
 
 ---
 
+## 4. ReWoo Strategy Pipeline
+
+**Location:** `packages/kodus-flow/src/engine/strategies/rewoo-strategy.ts`
+
+ReWoo (Reasoning with Working Memory) is a pipeline-based strategy that separates planning, execution, and synthesis into distinct phases. Best for knowledge synthesis tasks.
+
+### 4.1 Four-Phase Execution
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         REWOO STRATEGY PIPELINE                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  User Input + Available Tools                                               │
+│       │                                                                     │
+│       ▼                                                                     │
+│  ╔═══════════════════════════════════════════════════════════════════════╗  │
+│  ║ PHASE 1: SKETCH (Planning)                                            ║  │
+│  ║                                                                       ║  │
+│  ║  Prompt: getPlannerSystemPrompt()                                     ║  │
+│  ║          getPlannerUserPrompt()                                       ║  │
+│  ║                                                                       ║  │
+│  ║  First Decision: Are tools actually needed?                           ║  │
+│  ║  ┌───────────────────────────────────────────────────────────────┐    ║  │
+│  ║  │ NO TOOLS NEEDED if:                                           │    ║  │
+│  ║  │ - User is just greeting                                       │    ║  │
+│  ║  │ - General questions about capabilities                        │    ║  │
+│  ║  │ - Request can be answered with general knowledge              │    ║  │
+│  ║  │                                                               │    ║  │
+│  ║  │ TOOLS NEEDED if:                                              │    ║  │
+│  ║  │ - User requests specific data retrieval                       │    ║  │
+│  ║  │ - Task requires external tools                                │    ║  │
+│  ║  │ - Task requires multiple steps with dependencies              │    ║  │
+│  ║  └───────────────────────────────────────────────────────────────┘    ║  │
+│  ║                                                                       ║  │
+│  ║  If NO tools needed → { sketches: [] } → Skip to ORGANIZE            ║  │
+│  ║                                                                       ║  │
+│  ║  If tools needed → Create sketches (max 6):                          ║  │
+│  ║  {                                                                    ║  │
+│  ║    sketches: [{                                                       ║  │
+│  ║      id: "S1",                                                        ║  │
+│  ║      query: "Clear question to gather evidence",                      ║  │
+│  ║      tool: "TOOL_NAME",                                               ║  │
+│  ║      arguments: { param: "value" }                                    ║  │
+│  ║    }]                                                                 ║  │
+│  ║  }                                                                    ║  │
+│  ╚═══════════════════════════════════════════════════════════════════════╝  │
+│       │                                                                     │
+│       ▼                                                                     │
+│  ╔═══════════════════════════════════════════════════════════════════════╗  │
+│  ║ PHASE 2: WORK (Parallel Execution)                                    ║  │
+│  ║                                                                       ║  │
+│  ║  Concurrency: maxParallelWork = 4                                     ║  │
+│  ║                                                                       ║  │
+│  ║  For each sketch (in parallel):                                       ║  │
+│  ║  ┌───────────────────────────────────────────────────────────────┐    ║  │
+│  ║  │                                                               │    ║  │
+│  ║  │  1. Find tool in context.availableTools                       │    ║  │
+│  ║  │  2. SharedStrategyMethods.executeTool(action, context)        │    ║  │
+│  ║  │  3. Collect evidence:                                         │    ║  │
+│  ║  │                                                               │    ║  │
+│  ║  │  RewooEvidenceItem {                                          │    ║  │
+│  ║  │    id: "E1",                                                  │    ║  │
+│  ║  │    sketchId: "S1",                                            │    ║  │
+│  ║  │    toolName: "TOOL_NAME",                                     │    ║  │
+│  ║  │    input: { ... },                                            │    ║  │
+│  ║  │    output: <tool_result>,                                     │    ║  │
+│  ║  │    error?: "error message",                                   │    ║  │
+│  ║  │    latencyMs: 1234                                            │    ║  │
+│  ║  │  }                                                            │    ║  │
+│  ║  │                                                               │    ║  │
+│  ║  └───────────────────────────────────────────────────────────────┘    ║  │
+│  ║                                                                       ║  │
+│  ║  Timeout: perWorkTimeoutMs = 25,000                                   ║  │
+│  ╚═══════════════════════════════════════════════════════════════════════╝  │
+│       │                                                                     │
+│       ▼                                                                     │
+│  All Evidence Collected: [E1, E2, E3, ...]                                  │
+│       │                                                                     │
+│       ▼                                                                     │
+│  ╔═══════════════════════════════════════════════════════════════════════╗  │
+│  ║ PHASE 3: ORGANIZE (Synthesis)                                         ║  │
+│  ║                                                                       ║  │
+│  ║  Prompt: getOrganizerSystemPrompt()                                   ║  │
+│  ║          getOrganizerUserPrompt()                                     ║  │
+│  ║                                                                       ║  │
+│  ║  Input:                                                               ║  │
+│  ║  - Original goal/input                                                ║  │
+│  ║  - All collected evidence [E1, E2, ...]                               ║  │
+│  ║                                                                       ║  │
+│  ║  Rules:                                                               ║  │
+│  ║  - ONLY use information from provided evidence                        ║  │
+│  ║  - CITE every claim with evidence IDs [E1]                            ║  │
+│  ║  - STATE if evidence is insufficient                                  ║  │
+│  ║  - NO external knowledge or assumptions                               ║  │
+│  ║                                                                       ║  │
+│  ║  Output:                                                              ║  │
+│  ║  {                                                                    ║  │
+│  ║    answer: "Comprehensive evidence-based answer",                     ║  │
+│  ║    citations: ["E1", "E2", "E3"],                                     ║  │
+│  ║    confidence: 0.85                                                   ║  │
+│  ║  }                                                                    ║  │
+│  ╚═══════════════════════════════════════════════════════════════════════╝  │
+│       │                                                                     │
+│       ▼                                                                     │
+│  ┌───────────────────────────────────────┐                                  │
+│  │ PHASE 4: VERIFY (Optional)            │                                  │
+│  │                                       │                                  │
+│  │ If maxVerifyPasses > 0:               │                                  │
+│  │ - Validate answer against evidence    │                                  │
+│  │ - Re-ORGANIZE if verification fails   │                                  │
+│  └───────────────────────────────────────┘                                  │
+│       │                                                                     │
+│       ▼                                                                     │
+│  Final Answer with Citations                                                │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 4.2 Configuration
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| topKSketches | 4 | Maximum sketches per plan |
+| maxParallelWork | 4 | Concurrent tool executions |
+| overallTimeoutMs | 120,000 | Total execution timeout (2 min) |
+| perWorkTimeoutMs | 25,000 | Per-tool execution timeout |
+| perLLMTimeoutMs | 20,000 | Per-LLM call timeout |
+| maxVerifyPasses | 1 | Optional verification iterations |
+| requireEvidenceAnchors | true | Require citations in answer |
+
+---
+
+## 5. ReAct Strategy Pipeline
+
+**Location:** `packages/kodus-flow/src/engine/strategies/react-strategy.ts`
+
+ReAct (Reasoning + Acting) combines reasoning and action in an iterative loop. The agent thinks about what to do, takes an action, observes results, and continues until the task is complete.
+
+### 5.1 Iterative Think-Act-Observe Loop
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          REACT STRATEGY PIPELINE                            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  User Input + Available Tools + Scratchpad (Working Memory)                 │
+│       │                                                                     │
+│       ▼                                                                     │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │                        ITERATION LOOP                                 │  │
+│  │                    (max: 10 iterations)                               │  │
+│  ├───────────────────────────────────────────────────────────────────────┤  │
+│  │                                                                       │  │
+│  │  ┌─────────────────────────────────────────────────────────────────┐  │  │
+│  │  │ CHECK STOPPING CONDITIONS                                       │  │  │
+│  │  │                                                                 │  │  │
+│  │  │ 1. hasFinalAnswer? ──────────────────────────▶ EXIT (success)   │  │  │
+│  │  │ 2. shouldStop()? ────────▶ forceFinalAnswer() ▶ EXIT            │  │  │
+│  │  │ 3. detectLoop()? ────────▶ forceFinalAnswer() ▶ EXIT            │  │  │
+│  │  │ 4. Max iterations? ──────▶ forceFinalAnswer() ▶ EXIT            │  │  │
+│  │  └─────────────────────────────────────────────────────────────────┘  │  │
+│  │       │                                                               │  │
+│  │       ▼ (continue iteration)                                          │  │
+│  │                                                                       │  │
+│  │  ╔═════════════════════════════════════════════════════════════════╗  │  │
+│  │  ║ THINK: generateThought()                                        ║  │  │
+│  │  ║                                                                 ║  │  │
+│  │  ║  Prompt: getSystemPrompt() + getTaskPrompt()                    ║  │  │
+│  │  ║                                                                 ║  │  │
+│  │  ║  Input:                                                         ║  │  │
+│  │  ║  - User objective                                               ║  │  │
+│  │  ║  - Scratchpad (working memory)                                  ║  │  │
+│  │  ║  - Available tools                                              ║  │  │
+│  │  ║  - Execution history (all previous steps)                       ║  │  │
+│  │  ║                                                                 ║  │  │
+│  │  ║  Output: AgentThought                                           ║  │  │
+│  │  ║  {                                                              ║  │  │
+│  │  ║    reasoning: "Why I'm taking this action" (max 200 chars),     ║  │  │
+│  │  ║    confidence: 0.75,                                            ║  │  │
+│  │  ║    scratchpadUpdate: "Updated working memory...",               ║  │  │
+│  │  ║    hypotheses: [{                                               ║  │  │
+│  │  ║      approach: "Primary approach",                              ║  │  │
+│  │  ║      confidence: 0.8,                                           ║  │  │
+│  │  ║      action: {                                                  ║  │  │
+│  │  ║        type: "tool_call" | "final_answer",                      ║  │  │
+│  │  ║        toolName: "TOOL_NAME",     // if tool_call               ║  │  │
+│  │  ║        input: { ... },            // if tool_call               ║  │  │
+│  │  ║        content: "Final answer"    // if final_answer            ║  │  │
+│  │  ║      }                                                          ║  │  │
+│  │  ║    }],                                                          ║  │  │
+│  │  ║    reflection: {                                                ║  │  │
+│  │  ║      shouldContinue: true,                                      ║  │  │
+│  │  ║      reasoning: "Why continue or stop",                         ║  │  │
+│  │  ║      alternatives: ["alt1", "alt2"]                             ║  │  │
+│  │  ║    },                                                           ║  │  │
+│  │  ║    earlyStopping: {                                             ║  │  │
+│  │  ║      shouldStop: false,                                         ║  │  │
+│  │  ║      reason: "Reason to stop early"                             ║  │  │
+│  │  ║    }                                                            ║  │  │
+│  │  ║  }                                                              ║  │  │
+│  │  ╚═════════════════════════════════════════════════════════════════╝  │  │
+│  │       │                                                               │  │
+│  │       ▼                                                               │  │
+│  │  ╔═════════════════════════════════════════════════════════════════╗  │  │
+│  │  ║ ACT: executeAction()                                            ║  │  │
+│  │  ║                                                                 ║  │  │
+│  │  ║  ┌─────────────────────┐    ┌─────────────────────────────────┐ ║  │  │
+│  │  ║  │ type: "tool_call"  │    │ type: "final_answer"            │ ║  │  │
+│  │  ║  ├─────────────────────┤    ├─────────────────────────────────┤ ║  │  │
+│  │  ║  │                     │    │                                 │ ║  │  │
+│  │  ║  │ Find tool by name   │    │ Return ActionResult with        │ ║  │  │
+│  │  ║  │        ↓            │    │ type='final_answer'             │ ║  │  │
+│  │  ║  │ executeTool()       │    │ content=answer                  │ ║  │  │
+│  │  ║  │        ↓            │    │                                 │ ║  │  │
+│  │  ║  │ ActionResult        │    │        ↓                        │ ║  │  │
+│  │  ║  │ type='tool_result'  │    │ EXIT LOOP                       │ ║  │  │
+│  │  ║  │ output=result       │    │                                 │ ║  │  │
+│  │  ║  │                     │    │                                 │ ║  │  │
+│  │  ║  └─────────────────────┘    └─────────────────────────────────┘ ║  │  │
+│  │  ╚═════════════════════════════════════════════════════════════════╝  │  │
+│  │       │                                                               │  │
+│  │       ▼                                                               │  │
+│  │  ╔═════════════════════════════════════════════════════════════════╗  │  │
+│  │  ║ OBSERVE: analyzeResult()                                        ║  │  │
+│  │  ║                                                                 ║  │  │
+│  │  ║  Determine:                                                     ║  │  │
+│  │  ║  - isComplete: Did we achieve the goal?                         ║  │  │
+│  │  ║  - isSuccessful: Was the action successful?                     ║  │  │
+│  │  ║  - shouldContinue: Should we proceed?                           ║  │  │
+│  │  ║                                                                 ║  │  │
+│  │  ║  Generate feedback based on result type                         ║  │  │
+│  │  ╚═════════════════════════════════════════════════════════════════╝  │  │
+│  │       │                                                               │  │
+│  │       ▼                                                               │  │
+│  │  ┌─────────────────────────────────────────────────────────────────┐  │  │
+│  │  │ RECORD: ExecutionStep                                           │  │  │
+│  │  │                                                                 │  │  │
+│  │  │ {                                                               │  │  │
+│  │  │   id, type: 'think', timestamp, duration,                       │  │  │
+│  │  │   thought, action, result, observation,                         │  │  │
+│  │  │   metadata: { iteration, strategy, ... }                        │  │  │
+│  │  │ }                                                               │  │  │
+│  │  │                                                                 │  │  │
+│  │  │ → Added to execution history                                    │  │  │
+│  │  │ → UPDATE SESSION via ContextService                             │  │  │
+│  │  └─────────────────────────────────────────────────────────────────┘  │  │
+│  │       │                                                               │  │
+│  │       └────────────────────────────┐                                  │  │
+│  │                                    │                                  │  │
+│  │  iteration++                       │                                  │  │
+│  │       │                            │                                  │  │
+│  │       └───────────────────────────▶│                                  │  │
+│  │                                    │                                  │  │
+│  └────────────────────────────────────┼──────────────────────────────────┘  │
+│                                       │                                     │
+│                                       ▼                                     │
+│  Final Answer                                                               │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 5.2 Decision Matrix
+
+| Confidence | Action | Description |
+|------------|--------|-------------|
+| > 0.8 | `final_answer` | Complete info available |
+| 0.6 - 0.8 | `tool_call` | Need specific data |
+| 0.3 - 0.6 | `multi_hypothesis` | Generate alternatives |
+| < 0.3 | `early_stop` | Insufficient confidence |
+
+### 5.3 Loop Detection
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           LOOP DETECTION                                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  detectLoop() checks for:                                                   │
+│                                                                             │
+│  1. Identical Actions (last 3):                                             │
+│     ┌─────┐    ┌─────┐    ┌─────┐                                           │
+│     │  A  │ == │  A  │ == │  A  │  → LOOP DETECTED                          │
+│     └─────┘    └─────┘    └─────┘                                           │
+│                                                                             │
+│  2. Alternating Pattern:                                                    │
+│     ┌─────┐    ┌─────┐    ┌─────┐                                           │
+│     │  A  │    │  B  │    │  A  │  → LOOP DETECTED                          │
+│     └─────┘    └─────┘    └─────┘                                           │
+│                                                                             │
+│  3. Same Tool + Same Input (twice):                                         │
+│     ┌──────────────────┐    ┌──────────────────┐                            │
+│     │ tool: X          │ == │ tool: X          │ → LOOP DETECTED            │
+│     │ input: { a: 1 }  │    │ input: { a: 1 }  │                            │
+│     └──────────────────┘    └──────────────────┘                            │
+│                                                                             │
+│  On loop detection → forceFinalAnswer()                                     │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 5.4 Configuration
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| maxIterations | 10 | Maximum think-act-observe cycles |
+| maxToolCalls | 20 | Maximum total tool calls |
+| maxExecutionTime | 300,000 | Total timeout (5 min) |
+| stepTimeout | 60,000 | Per-step timeout (1 min) |
+
+---
+
+## 6. Plan-Execute Strategy Pipeline
+
+**Location:** `packages/kodus-flow/src/engine/strategies/plan-execute-strategy.ts`
+
+Plan-Execute is a two-phase strategy that first creates a complete plan, then executes it step by step. Best for structured, predictable tasks.
+
+### 6.1 Two-Phase Execution
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      PLAN-EXECUTE STRATEGY PIPELINE                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  User Input + Available Tools                                               │
+│       │                                                                     │
+│       ▼                                                                     │
+│  ╔═══════════════════════════════════════════════════════════════════════╗  │
+│  ║ PHASE 1: PLAN                                                         ║  │
+│  ║                                                                       ║  │
+│  ║  Prompt: getSystemPrompt() + getUserPrompt()                          ║  │
+│  ║                                                                       ║  │
+│  ║  Planning Framework:                                                  ║  │
+│  ║  1. Analyze - Understand task and available tools                     ║  │
+│  ║  2. Break Down - Decompose into manageable steps                      ║  │
+│  ║  3. Sequence - Order steps logically with dependencies                ║  │
+│  ║  4. Validate - Ensure each step is executable                         ║  │
+│  ║  5. Optimize - Keep plan concise and efficient                        ║  │
+│  ║                                                                       ║  │
+│  ║  Output: Plan                                                         ║  │
+│  ║  {                                                                    ║  │
+│  ║    goal: "Overall objective",                                         ║  │
+│  ║    reasoning: "Why this approach works",                              ║  │
+│  ║    steps: [                                                           ║  │
+│  ║      {                                                                ║  │
+│  ║        id: "step-1",                                                  ║  │
+│  ║        type: "tool_call",                                             ║  │
+│  ║        toolName: "TOOL_NAME",                                         ║  │
+│  ║        description: "What this step does",                            ║  │
+│  ║        input: { param: "value" }                                      ║  │
+│  ║      },                                                               ║  │
+│  ║      {                                                                ║  │
+│  ║        id: "step-2",                                                  ║  │
+│  ║        type: "tool_call",                                             ║  │
+│  ║        toolName: "ANOTHER_TOOL",                                      ║  │
+│  ║        description: "...",                                            ║  │
+│  ║        input: { ... }                                                 ║  │
+│  ║      },                                                               ║  │
+│  ║      {                                                                ║  │
+│  ║        id: "step-3",                                                  ║  │
+│  ║        type: "final_answer",                                          ║  │
+│  ║        content: "Final response to user"                              ║  │
+│  ║      }                                                                ║  │
+│  ║    ]                                                                  ║  │
+│  ║  }                                                                    ║  │
+│  ║                                                                       ║  │
+│  ║  EMIT EVENT: agent.plan.created                                       ║  │
+│  ╚═══════════════════════════════════════════════════════════════════════╝  │
+│       │                                                                     │
+│       ▼                                                                     │
+│  Plan with N Steps                                                          │
+│       │                                                                     │
+│       ▼                                                                     │
+│  ╔═══════════════════════════════════════════════════════════════════════╗  │
+│  ║ PHASE 2: EXECUTE (Sequential)                                         ║  │
+│  ║                                                                       ║  │
+│  ║  ┌─────────────────────────────────────────────────────────────────┐  ║  │
+│  ║  │                   FOR EACH STEP IN PLAN                         │  ║  │
+│  ║  ├─────────────────────────────────────────────────────────────────┤  ║  │
+│  ║  │                                                                 │  ║  │
+│  ║  │  EMIT EVENT: agent.step.started                                 │  ║  │
+│  ║  │       │                                                         │  ║  │
+│  ║  │       ▼                                                         │  ║  │
+│  ║  │  ┌─────────────────────────────────────────────────────────┐    │  ║  │
+│  ║  │  │ CHECK LIMITS                                            │    │  ║  │
+│  ║  │  │                                                         │    │  ║  │
+│  ║  │  │ Timeout: Date.now() - startTime > maxExecutionTime?     │    │  ║  │
+│  ║  │  │ Tool calls: toolCallsCount >= maxToolCalls?             │    │  ║  │
+│  ║  │  │                                                         │    │  ║  │
+│  ║  │  │ If exceeded → STOP EXECUTION                            │    │  ║  │
+│  ║  │  └─────────────────────────────────────────────────────────┘    │  ║  │
+│  ║  │       │                                                         │  ║  │
+│  ║  │       ▼                                                         │  ║  │
+│  ║  │  ┌─────────────────────────────────────────────────────────┐    │  ║  │
+│  ║  │  │ EXECUTE STEP                                            │    │  ║  │
+│  ║  │  │                                                         │    │  ║  │
+│  ║  │  │  ┌───────────────────┐   ┌───────────────────────────┐  │    │  ║  │
+│  ║  │  │  │ type: "tool_call" │   │ type: "final_answer"      │  │    │  ║  │
+│  ║  │  │  ├───────────────────┤   ├───────────────────────────┤  │    │  ║  │
+│  ║  │  │  │                   │   │                           │  │    │  ║  │
+│  ║  │  │  │ Find tool by name │   │ Return static response    │  │    │  ║  │
+│  ║  │  │  │        ↓          │   │                           │  │    │  ║  │
+│  ║  │  │  │ executeTool()     │   │                           │  │    │  ║  │
+│  ║  │  │  │        ↓          │   │                           │  │    │  ║  │
+│  ║  │  │  │ Return result     │   │                           │  │    │  ║  │
+│  ║  │  │  │                   │   │                           │  │    │  ║  │
+│  ║  │  │  └───────────────────┘   └───────────────────────────┘  │    │  ║  │
+│  ║  │  │                                                         │    │  ║  │
+│  ║  │  └─────────────────────────────────────────────────────────┘    │  ║  │
+│  ║  │       │                                                         │  ║  │
+│  ║  │       ▼                                                         │  ║  │
+│  ║  │  ┌─────────────────────────────────────────────────────────┐    │  ║  │
+│  ║  │  │ BUILD EXECUTION STEP                                    │    │  ║  │
+│  ║  │  │                                                         │    │  ║  │
+│  ║  │  │ ExecutionStep {                                         │    │  ║  │
+│  ║  │  │   id, timestamp, duration,                              │    │  ║  │
+│  ║  │  │   status: 'completed' | 'failed',                       │    │  ║  │
+│  ║  │  │   result: <from executeStepAction>,                     │    │  ║  │
+│  ║  │  │   metadata: { planStep, stepIndex, success/error }      │    │  ║  │
+│  ║  │  │ }                                                       │    │  ║  │
+│  ║  │  └─────────────────────────────────────────────────────────┘    │  ║  │
+│  ║  │       │                                                         │  ║  │
+│  ║  │       ▼                                                         │  ║  │
+│  ║  │  UPDATE SESSION via ContextService                              │  ║  │
+│  ║  │  - completedSteps                                               │  ║  │
+│  ║  │  - currentStep                                                  │  ║  │
+│  ║  │  - stepsJournal                                                 │  ║  │
+│  ║  │       │                                                         │  ║  │
+│  ║  │       ▼                                                         │  ║  │
+│  ║  │  EMIT EVENT: agent.step.completed or agent.step.failed          │  ║  │
+│  ║  │                                                                 │  ║  │
+│  ║  └─────────────────────────────────────────────────────────────────┘  ║  │
+│  ║                                                                       ║  │
+│  ╚═══════════════════════════════════════════════════════════════════════╝  │
+│       │                                                                     │
+│       ▼                                                                     │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │ PHASE 3: FINALIZE                                                     │  │
+│  │                                                                       │  │
+│  │ extractFinalResult() from all steps                                   │  │
+│  │                                                                       │  │
+│  │ buildFinalResult() {                                                  │  │
+│  │   output: "Final answer",                                             │  │
+│  │   success: true | false,                                              │  │
+│  │   strategy: "plan-execute",                                           │  │
+│  │   steps: [all executed steps],                                        │  │
+│  │   executionTime: totalMs,                                             │  │
+│  │   metadata: {                                                         │  │
+│  │     planSteps: originalCount,                                         │  │
+│  │     executedSteps: actualCount,                                       │  │
+│  │     toolCallsCount                                                    │  │
+│  │   }                                                                   │  │
+│  │ }                                                                     │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+│       │                                                                     │
+│       ▼                                                                     │
+│  Final Result with Execution Metadata                                       │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 6.2 Configuration
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| maxPlanningSteps | 10 | Maximum steps in plan |
+| maxExecutionSteps | 15 | Maximum execution steps |
+| maxToolCalls | 25 | Maximum total tool calls |
+| maxExecutionTime | 300,000 | Total timeout (5 min) |
+| enablePlanningValidation | true | Validate plan before execution |
+
+---
+
+## Strategy Comparison
+
+| Aspect | ReWoo | ReAct | Plan-Execute |
+|--------|-------|-------|--------------|
+| **Execution** | Parallel work | Iterative loop | Sequential |
+| **Planning** | Sketches upfront | Per-iteration | Complete plan upfront |
+| **Best For** | Knowledge synthesis | Complex problem-solving | Structured tasks |
+| **Tool Parallelism** | Yes (4 concurrent) | No | No |
+| **Adaptability** | Low | High | Low |
+| **Observability** | Evidence-based | Step-by-step | Plan + execution |
+
+---
+
